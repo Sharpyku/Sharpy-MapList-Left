@@ -11,8 +11,8 @@ public class SharpyMapListPlugin : BasePlugin, IPluginConfig<PluginConfig>
 {
     public override string ModuleName => "Sharpy-MapList";
     public override string ModuleAuthor => "Sharpyku";
-    public override string ModuleVersion => "1.0.0";
-    public override string ModuleDescription => "Maps Done / Maps Left / Profile commands for SharpTimer";
+    public override string ModuleVersion => "1.1.0";
+    public override string ModuleDescription => "Maps Done / Maps Left / Map Search / Profile commands for SharpTimer";
 
     public PluginConfig Config { get; set; } = new();
     private Database? _db;
@@ -149,6 +149,79 @@ public class SharpyMapListPlugin : BasePlugin, IPluginConfig<PluginConfig>
             catch (Exception ex)
             {
                 Logger.LogError($"[Sharpy-MapList] MapsDone error: {ex.Message}");
+            }
+        });
+    }
+
+    // ── !mds (map done search) ─────────────────────────────────────
+
+    [ConsoleCommand("css_mds", "Search your time on a specific map")]
+    [CommandHelper(whoCanExecute: CommandUsage.CLIENT_ONLY)]
+    public void MapDoneSearchCommand(CCSPlayerController? player, CommandInfo command)
+    {
+        if (player == null || !player.IsValid || player.IsBot) return;
+        if (_db == null) { player.PrintToChat($"{GetPrefix()} Database not configured."); return; }
+
+        if (command.ArgCount < 2 || string.IsNullOrWhiteSpace(command.ArgByIndex(1)))
+        {
+            player.PrintToChat($"{GetPrefix()} {ChatColors.Grey}Usage: {ChatColors.Lime}!mds <mapname> {ChatColors.Grey}(e.g. !mds bhop_alley)");
+            return;
+        }
+
+        var steamId = player.SteamID.ToString();
+        int style = 0;
+        string search = command.ArgByIndex(1).Trim().ToLower();
+
+        // Optional style arg: !mds bhop_alley 6
+        if (command.ArgCount > 2 && int.TryParse(command.ArgByIndex(2), out int s)) style = s;
+
+        var db = _db;
+        var prefix = GetPrefix();
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var mapsDone = await db.GetPlayerMapsDoneAsync(steamId, style);
+                string styleName = GetStyleName(style);
+
+                var exact = mapsDone.Where(m => m.MapName.ToLower() == search).ToList();
+                var matches = exact.Count > 0 ? exact : mapsDone.Where(m => m.MapName.ToLower().Contains(search)).ToList();
+
+                if (matches.Count == 0)
+                {
+                    Server.NextFrame(() =>
+                    {
+                        if (player == null || !player.IsValid) return;
+                        player.PrintToChat($"{prefix} {ChatColors.Grey}No completed map matching {ChatColors.Lime}\"{search}\" {ChatColors.Grey}({styleName})");
+                    });
+                    return;
+                }
+
+                var lines = new List<string>();
+                if (matches.Count == 1)
+                {
+                    var (mapName, ticks) = matches[0];
+                    lines.Add($"{prefix} {ChatColors.Lime}{mapName} {ChatColors.Grey}({styleName}){ChatColors.Default}: {ChatColors.Green}{FormatTime(ticks)}");
+                }
+                else
+                {
+                    lines.Add($"{prefix} {ChatColors.Green}Found {matches.Count} maps {ChatColors.Grey}matching \"{search}\" ({styleName}):");
+                    foreach (var (mapName, ticks) in matches.Take(10))
+                        lines.Add($" {ChatColors.Grey}• {ChatColors.Lime}{mapName} {ChatColors.Default}- {ChatColors.Green}{FormatTime(ticks)}");
+                    if (matches.Count > 10)
+                        lines.Add($" {ChatColors.Grey}...and {matches.Count - 10} more. Be more specific.");
+                }
+
+                Server.NextFrame(() =>
+                {
+                    if (player == null || !player.IsValid) return;
+                    foreach (var line in lines) player.PrintToChat(line);
+                });
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError($"[Sharpy-MapList] MapDoneSearch error: {ex.Message}");
             }
         });
     }
